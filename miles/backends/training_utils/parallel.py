@@ -1,5 +1,19 @@
 from dataclasses import dataclass
+
 import torch.distributed as dist
+
+
+_parallel_state: "ParallelState | None" = None
+
+
+def set_parallel_state(state: "ParallelState") -> None:
+    global _parallel_state
+    _parallel_state = state
+
+
+def get_parallel_state() -> "ParallelState":
+    assert _parallel_state is not None, "ParallelState not initialized. Call set_parallel_state() first."
+    return _parallel_state
 
 
 @dataclass

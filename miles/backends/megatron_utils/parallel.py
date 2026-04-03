@@ -6,30 +6,17 @@ import torch
 from megatron.core import mpu
 from megatron.core.packed_seq_params import PackedSeqParams
 from megatron.core.utils import get_model_config
+from megatron.training.global_vars import get_args
 
 from ..training_utils.parallel import ParallelState
 
 logger = logging.getLogger(__name__)
 
 
-def create_megatron_parallel_state(
-    model: torch.nn.Module | Sequence[torch.nn.Module] | None = None,
-) -> ParallelState:
-    vpp_size_value = mpu.get_virtual_pipeline_model_parallel_world_size()
-    if vpp_size_value is None:
-        vpp_size = 1
-        microbatch_group_size_per_vp_stage = None
-    elif vpp_size_value > 1:
-        assert model is not None
-        model_to_check = model[0] if isinstance(model, Sequence) else model
-        config = get_model_config(model_to_check)
-        vpp_size = vpp_size_value
-        microbatch_group_size_per_vp_stage = config.microbatch_group_size_per_vp_stage
-    else:
-        vpp_size = 1
-        microbatch_group_size_per_vp_stage = None
+def create_megatron_parallel_state() -> ParallelState:
+    vpp_size, microbatch_group_size_per_vp_stage = _compute_vpp_fields()
 
-    parallel_state = ParallelState(
+    return ParallelState(
         dp_rank=mpu.get_data_parallel_rank(with_context_parallel=False),
         dp_cp_src_rank=mpu.get_data_parallel_src_rank(with_context_parallel=True),
         dp_size=mpu.get_data_parallel_world_size(with_context_parallel=False),
@@ -49,7 +36,29 @@ def create_megatron_parallel_state(
         microbatch_group_size_per_vp_stage=microbatch_group_size_per_vp_stage,
     )
 
-    return parallel_state
+
+def _compute_vpp_fields() -> tuple[int, int | None]:
+    vpp_size_value = mpu.get_virtual_pipeline_model_parallel_world_size()
+    if vpp_size_value is None or vpp_size_value <= 1:
+        return 1, None
+
+    return vpp_size_value, get_args().pipeline_model_parallel_size
+
+
+def verify_megatron_parallel_state(
+    parallel_state: ParallelState,
+    model: torch.nn.Module | Sequence[torch.nn.Module],
+) -> None:
+    """Verify that ParallelState fields match what the model config produces."""
+    vpp_size_value = mpu.get_virtual_pipeline_model_parallel_world_size()
+    if vpp_size_value is not None and vpp_size_value > 1:
+        model_to_check = model[0] if isinstance(model, Sequence) else model
+        config = get_model_config(model_to_check)
+        expected = config.microbatch_group_size_per_vp_stage
+        actual = parallel_state.microbatch_group_size_per_vp_stage
+        assert (
+            actual == expected
+        ), f"microbatch_group_size_per_vp_stage mismatch: ParallelState has {actual}, model config has {expected}"
 
 
 def get_packed_seq_params(batch: dict[str, torch.Tensor], args: Namespace) -> PackedSeqParams:

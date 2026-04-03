@@ -8,6 +8,10 @@ from megatron.core.config import set_experimental_flag
 from megatron.core.num_microbatches_calculator import init_num_microbatches_calculator
 from megatron.training.global_vars import _build_tokenizer, set_args
 
+from miles.backends.training_utils.parallel import set_parallel_state
+
+from .parallel import create_megatron_parallel_state
+
 logger = logging.getLogger(__name__)
 
 
@@ -61,6 +65,8 @@ def init(args):
 
     # Pytorch distributed.
     _initialize_distributed(args)
+
+    set_parallel_state(create_megatron_parallel_state())
 
     # https://github.com/NVIDIA/Megatron-LM/issues/1563
     assert np.__version__.startswith("1."), "Megatron does not support numpy 2.x"
