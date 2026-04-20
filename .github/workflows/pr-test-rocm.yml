@@ -19,7 +19,7 @@ concurrency:
 jobs:
   fast:
     if: (github.event_name == 'workflow_dispatch') || (github.event.pull_request)
-    runs-on: [self-hosted, rocm, mi300]
+    runs-on: [self-hosted, rocm, mi300x]
     container:
       image: rlsys/miles:rocm7-mi300-sglang0.5.9-te2.10.0-dev-307b5e86
       options: >
