@@ -26,8 +26,8 @@ jobs:
         --device=/dev/kfd
         --device=/dev/dri
         --security-opt seccomp=unconfined
-        --group-add video
-        --group-add render
+        --group-add 44
+        --group-add 109
         --cap-add=SYS_PTRACE
         --ipc=host
         --shm-size=32g
