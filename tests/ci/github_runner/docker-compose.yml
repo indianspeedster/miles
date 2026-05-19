@@ -3,45 +3,64 @@
 # its labels ([self-hosted, rocm, mi300x, mi355x]).
 #
 # The runner container is just an orchestrator — it mounts the host's
-# /var/run/docker.sock, so when GitHub Actions spawns a job container, it
-# does so against the HOST docker daemon. That means the workflow's
+# /var/run/docker.sock, so when GitHub Actions spawns a job container it
+# runs against the HOST docker daemon. That means the workflow's
 # `container.options` block needs to reference host paths.
 #
-# See `README.md` in this directory for one-time setup steps (externals
-# dir, .env, registration token).
+# Notes:
+# - The runner image tag must be current — GitHub deprecates old listener
+#   versions and rejects messages from them (HTTP 403 "deprecated"). Bump
+#   the tag when you see this.
+# - The entrypoint is idempotent: config.sh only runs on first boot
+#   (when /home/runner/.runner is absent). Subsequent container restarts
+#   just exec run.sh against the cached registration.
+#
+# See `README.md` in this directory for one-time host setup (externals,
+# .env, registration token).
 version: "3.9"
 
 services:
   runner:
-    # Pin to a recent runner image; the runner refuses to self-upgrade
-    # while --disableupdate is set, so we need to bump this tag manually.
-    image: ghcr.io/actions/actions-runner:2.329.0
+    image: ghcr.io/actions/actions-runner:2.334.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /it-share/shekhar/miles_ci:/data/miles_ci
-      # The runner image requires this externals directory to exist on
-      # the host (see README "Step 2: Prepare /home/runner/externals").
-      - /home/runner/externals:/home/runner/externals
+      # The runner image requires /home/runner/externals to be populated.
+      # We mount from /it-share/shekhar/runner_externals (user-writable) so
+      # no sudo is needed on this host. Populate it once by `docker cp`-ing
+      # /home/runner/externals/. out of the actions-runner image.
+      - /it-share/shekhar/runner_externals:/home/runner/externals
     deploy:
       replicas: 8
-    restart: always
+    # Use on-failure (not always) so we don't restart-loop a runner that's
+    # been deliberately deregistered or whose token expired.
+    restart: on-failure:3
     environment:
       RUNNER_ALLOW_RUNASROOT: "1"
+      GITHUB_RUNNER_URL: "${GITHUB_RUNNER_URL}"
+      GITHUB_RUNNER_TOKEN: "${GITHUB_RUNNER_TOKEN}"
     privileged: true
     user: root
     # Labels:
     #   self-hosted    — implicit, every self-hosted runner has it
     #   rocm           — distinguishes from NVIDIA runners
     #   mi300x, mi355x — both included so workflows targeting either match
-    entrypoint: >
-      sh -c "
-      cd /data/miles_ci &&
-      /home/runner/config.sh
-        --url ${GITHUB_RUNNER_URL}
-        --token ${GITHUB_RUNNER_TOKEN}
-        --labels rocm,mi300x,mi355x
-        --unattended
-        --work /data/miles_ci/runner_$(hostname)
-        --disableupdate &&
-      /home/runner/run.sh
-      "
+    entrypoint:
+      - bash
+      - -c
+      - |
+        set -e
+        cd /data/miles_ci
+        if [ ! -f /home/runner/.runner ]; then
+          echo "[entrypoint] running config.sh (first boot)"
+          /home/runner/config.sh \
+            --url "$GITHUB_RUNNER_URL" \
+            --token "$GITHUB_RUNNER_TOKEN" \
+            --labels rocm,mi300x,mi355x \
+            --unattended \
+            --work /data/miles_ci/runner_$(hostname) \
+            --disableupdate
+        else
+          echo "[entrypoint] already configured, skipping config.sh"
+        fi
+        exec /home/runner/run.sh
