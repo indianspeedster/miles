@@ -1,0 +1,49 @@
+# Layered image that bakes the MI355X (gfx950) CI runtime patches on top of
+# the upstream rlsys/miles:MI350-355-latest base. The two fixes baked in:
+#
+# 1. nvidia-modelopt is required by megatron-bridge's gpt_provider.py — the
+#    upstream image ships without it, so any test that uses
+#    `--megatron-to-hf-mode bridge` (e.g. tests/e2e/short/*) raises
+#    ModuleNotFoundError at MegatronTrainRayActor.init().
+#
+# 2. sglang's deepseek_v2 rope_scaling block forces rope_type="deepseek_yarn"
+#    whenever rope_scaling is truthy. In transformers v5 rope_scaling is
+#    auto-populated for every model (rope_type="default"), which mis-classifies
+#    non-yarn configs (e.g. GLM-4.7-Flash) and crashes get_rope() because
+#    original_max_position_embeddings is unset. Patch it to only force
+#    deepseek_yarn when the model actually uses yarn scaling.
+#
+# Build (on the runner host, no registry push needed):
+#   docker build -f docker/Dockerfile.rocm_MI350-5-patch \
+#     -t rlsys/miles:MI350-355-rocmpatch .
+
+ARG BASE_IMAGE=rlsys/miles:MI350-355-latest
+FROM ${BASE_IMAGE}
+
+SHELL ["/bin/bash", "-ceuxo", "pipefail"]
+
+RUN pip install nvidia-modelopt==0.44.0
+
+RUN python - <<'PY'
+import pathlib
+p = pathlib.Path("/sgl-workspace/sglang/python/sglang/srt/models/deepseek_v2.py")
+src = p.read_text()
+old = (
+    "        # NOTE modification to rope_scaling must be done early enough, b/c e.g. Indexer needs it\n"
+    "        if rope_scaling:\n"
+    "            rope_scaling[\"rope_type\"] = \"deepseek_yarn\"\n"
+)
+new = (
+    "        # NOTE modification to rope_scaling must be done early enough, b/c e.g. Indexer needs it\n"
+    "        if rope_scaling:\n"
+    "            # Only force deepseek_yarn when the model actually uses yarn scaling.\n"
+    "            # In transformers v5, rope_parameters/rope_scaling is auto-populated\n"
+    "            # for every model (including rope_type=\"default\"), so a truthy check\n"
+    "            # alone misclassifies non-yarn configs (e.g. GLM-4.7-Flash) and crashes\n"
+    "            # later in get_rope() which dereferences original_max_position_embeddings.\n"
+    "            if rope_scaling.get(\"rope_type\") in (\"yarn\", \"deepseek_yarn\"):\n"
+    "                rope_scaling[\"rope_type\"] = \"deepseek_yarn\"\n"
+)
+assert old in src, "deepseek_v2.py rope_scaling block not found — base image changed?"
+p.write_text(src.replace(old, new))
+PY

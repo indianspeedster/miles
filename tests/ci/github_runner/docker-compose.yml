@@ -1,14 +1,26 @@
-# Please refer to `README.md` for how to setup this GitHub action runner
+# Self-hosted runner pool for ROCm fork (indianspeedster/miles).
+# Each replica registers itself with GitHub and waits for jobs that match
+# its labels ([self-hosted, rocm, mi300x, mi355x]).
+#
+# The runner container is just an orchestrator — it mounts the host's
+# /var/run/docker.sock, so when GitHub Actions spawns a job container, it
+# does so against the HOST docker daemon. That means the workflow's
+# `container.options` block needs to reference host paths.
+#
+# See `README.md` in this directory for one-time setup steps (externals
+# dir, .env, registration token).
 version: "3.9"
 
 services:
   runner:
-    # NOTE need to use the latest, o/w the runner will want to upgrade itself
+    # Pin to a recent runner image; the runner refuses to self-upgrade
+    # while --disableupdate is set, so we need to bump this tag manually.
     image: ghcr.io/actions/actions-runner:2.329.0
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - /data/miles_ci:/data/miles_ci
-      # it requires this folder
+      - /it-share/shekhar/miles_ci:/data/miles_ci
+      # The runner image requires this externals directory to exist on
+      # the host (see README "Step 2: Prepare /home/runner/externals").
       - /home/runner/externals:/home/runner/externals
     deploy:
       replicas: 8
@@ -17,13 +29,19 @@ services:
       RUNNER_ALLOW_RUNASROOT: "1"
     privileged: true
     user: root
-    # ref: https://github.com/actions/runner/issues/367#issuecomment-2007558723
-    # ref: https://github.com/actions/runner
-    # args ref: https://github.com/actions/runner/blob/68ff57dbc4c836d50f46602a8a53301fb9513eb4/src/Runner.Listener/CommandSettings.cs#L53
-    # TODO seems we should not run config.sh repeatedly
+    # Labels:
+    #   self-hosted    — implicit, every self-hosted runner has it
+    #   rocm           — distinguishes from NVIDIA runners
+    #   mi300x, mi355x — both included so workflows targeting either match
     entrypoint: >
       sh -c "
       cd /data/miles_ci &&
-      /home/runner/config.sh --url ${GITHUB_RUNNER_URL} --token ${GITHUB_RUNNER_TOKEN} --unattended --work /data/miles_ci/runner_$(hostname) --disableupdate &&
+      /home/runner/config.sh
+        --url ${GITHUB_RUNNER_URL}
+        --token ${GITHUB_RUNNER_TOKEN}
+        --labels rocm,mi300x,mi355x
+        --unattended
+        --work /data/miles_ci/runner_$(hostname)
+        --disableupdate &&
       /home/runner/run.sh
       "
