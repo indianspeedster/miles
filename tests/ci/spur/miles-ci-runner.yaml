@@ -1,0 +1,62 @@
+# Self-hosted GitHub Actions runner submitted as a SpurJob on the
+# AMD MI355X cluster (spur.ai). The pod runs the actions-runner binary
+# directly inside the `rlsys/miles:MI350-355-rocmpatch` image, so
+# workflows that target this runner must NOT use `container:` (that
+# feature requires a bare-metal runner — runners-in-containers can't
+# spawn nested containers).
+#
+# Submit:
+#   1. Mint a fresh GitHub registration token (valid 1h):
+#        gh api -X POST repos/<org>/<repo>/actions/runners/registration-token --jq .token
+#   2. Substitute it into the command block below (envsubst or sed).
+#   3. kubectl apply -f tests/ci/spur/miles-ci-runner.yaml
+#
+# After the pod registers, the runner appears in the GitHub UI under
+# Settings → Actions → Runners with labels [self-hosted, rocm, mi355x, spur]
+# and the `pr-test-rocm-spur.yml` workflow can dispatch jobs to it.
+#
+# To roll the runner (e.g., to pick up a new patched image or rotate
+# tokens) just `kubectl delete spurjob -n spur miles-ci-runner` and
+# re-apply with a fresh token.
+apiVersion: spur.ai/v1alpha1
+kind: SpurJob
+metadata:
+  name: miles-ci-runner
+  namespace: spur
+spec:
+  name: miles-ci-runner
+  image: rlsys/miles:MI350-355-rocmpatch
+  gpus:
+    count: 8
+    gpuType: mi355x
+  numNodes: 1
+  tasksPerNode: 1
+  cpusPerTask: 64
+  memoryPerNode: "512Gi"
+  shmSize: "64Gi"
+  command:
+    - /bin/bash
+    - -c
+    - |
+      set -euo pipefail
+      export RUNNER_ALLOW_RUNASROOT=1
+      mkdir -p /actions-runner
+      cd /actions-runner
+      if [ ! -f run.sh ]; then
+        echo "[bootstrap] downloading actions-runner v2.334.0"
+        curl -fSL -o ar.tgz \
+          https://github.com/actions/runner/releases/download/v2.334.0/actions-runner-linux-x64-2.334.0.tar.gz
+        tar xzf ar.tgz
+      fi
+      if [ ! -f .runner ]; then
+        echo "[bootstrap] registering with GitHub"
+        ./config.sh \
+          --url https://github.com/indianspeedster/miles \
+          --token __RUNNER_TOKEN__ \
+          --name miles-spur-runner-${HOSTNAME} \
+          --labels rocm,mi355x,spur \
+          --work _work \
+          --unattended \
+          --replace
+      fi
+      exec ./run.sh
