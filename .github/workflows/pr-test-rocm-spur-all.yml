@@ -92,4 +92,5 @@ jobs:
           python tests/ci/gpu_lock_exec.py --count ${{ matrix.gpu_count }} -- \
             python tests/ci/run_suite.py --hw cuda --suite ${{ matrix.suite }} \
               --enable-retry --max-attempts 2 \
+              --continue-on-error \
               $PARTITION_ARGS
