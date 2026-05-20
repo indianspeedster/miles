@@ -11,7 +11,15 @@ from __future__ import annotations
 import json
 import logging
 import os
-from enum import Enum, StrEnum
+from enum import Enum
+
+try:
+    from enum import StrEnum
+except ImportError:
+    # Python < 3.11 compat shim
+    class StrEnum(str, Enum):
+        def __str__(self) -> str:
+            return self.value
 
 import httpx
 
