@@ -1,0 +1,79 @@
+name: PR Test (ROCm / Spur k8s)
+
+# Targets a self-hosted runner that runs INSIDE a spur-managed k8s pod
+# on the AMD MI355X cluster. Because the runner is itself a pod (i.e.,
+# already inside a container), GitHub Actions' `container:` block is
+# not usable here — that feature requires a bare-metal runner. Instead,
+# every step runs directly in the pod, which is built from the patched
+# `rlsys/miles:MI350-355-rocmpatch` image (modelopt + sglang rope fix
+# baked in).
+#
+# Submit the runner pod with `kubectl apply -f ./tests/ci/spur/miles-ci-runner.yaml`
+# on the spur control node before triggering this workflow.
+
+on:
+  workflow_dispatch:
+    inputs:
+      suite:
+        description: 'Suite to run via tests/ci/run_suite.py'
+        required: true
+        type: choice
+        default: 'stage-b-short-8-gpu'
+        options:
+          - stage-b-short-8-gpu
+          - stage-b-fast-1-gpu
+          - stage-c-ckpt-8-gpu
+          - stage-c-long-8-gpu
+          - stage-c-lora-8-gpu
+          - stage-c-fsdp-8-gpu
+          - stage-c-megatron-8-gpu
+          - stage-c-precision-8-gpu
+      gpu_count:
+        description: 'Number of GPUs to reserve (gpu_lock_exec --count)'
+        required: true
+        type: number
+        default: 8
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  run-suite:
+    runs-on: [self-hosted, rocm, mi355x, spur]
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      MILES_TEST_FEW_GPU: '0'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Cleanup Ray processes
+        shell: bash
+        run: |
+          pkill -9 -f 'ray::' 2>/dev/null || true
+          pkill -9 -f raylet 2>/dev/null || true
+          pkill -9 -f gcs_server 2>/dev/null || true
+          pkill -9 -f 'ray-dashboard' 2>/dev/null || true
+          pkill -9 sglang 2>/dev/null || true
+          ray stop --force 2>/dev/null || true
+          rm -rf /tmp/ray/* 2>/dev/null || true
+          sleep 3
+
+      - name: Install miles (editable)
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+
+      - name: Execute suite
+        shell: bash
+        run: |
+          python tests/ci/gpu_lock_exec.py --count ${{ inputs.gpu_count }} -- \
+            python tests/ci/run_suite.py --hw cuda --suite ${{ inputs.suite }} \
+              --enable-retry --max-attempts 2
