@@ -1885,6 +1885,27 @@ def miles_validate_args(args):
     if args.recompute_logprobs_via_prefill:
         assert args.true_on_policy_mode, "--recompute-logprobs-via-prefill requires --true-on-policy-mode"
 
+    # ROCm (gfx9xx) / hipBLASLt has no algorithm for the bias-fused wgrad
+    # GEMM that TE's LayerNormLinear backward uses when
+    # fuse_wgrad_accumulation=True + bias=True. Trips on any model with QKV
+    # bias (qwen2.5, qwen3, glm4.7, ...). Default the flag off on ROCm so
+    # individual tests/configs don't need to remember --no-gradient-
+    # accumulation-fusion. CUDA users keep the default-on behavior;
+    # advanced ROCm users can re-enable explicitly with
+    # `--gradient-accumulation-fusion` if their hipBLASLt has the algo.
+    import torch
+
+    if (
+        getattr(args, "gradient_accumulation_fusion", False)
+        and torch.cuda.is_available()
+        and torch.version.hip is not None
+    ):
+        logger.info(
+            "Auto-disabling --gradient-accumulation-fusion on ROCm "
+            "(hipBLASLt has no algorithm for the bias-fused wgrad GEMM)"
+        )
+        args.gradient_accumulation_fusion = False
+
     # Normalize --tito-allowed-append-roles: lowercase + deduplicate.
     raw_roles = getattr(args, "tito_allowed_append_roles", ["tool"])
     args.tito_allowed_append_roles = sorted(set(r.lower() for r in raw_roles))
