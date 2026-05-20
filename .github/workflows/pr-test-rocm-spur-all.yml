@@ -30,15 +30,16 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - { suite: stage-c-lora-8-gpu,     gpu_count: 8, est_min:  10 }
-          - { suite: stage-b-fast-1-gpu,     gpu_count: 1, est_min:  15 }
-          - { suite: stage-b-short-8-gpu,    gpu_count: 8, est_min:  40 }
-          - { suite: stage-c-ckpt-8-gpu,     gpu_count: 8, est_min:  60 }
-          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, partition_id: 0, partition_size: 3 }
-          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, partition_id: 1, partition_size: 3 }
-          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, partition_id: 2, partition_size: 3 }
-          - { suite: stage-c-long-8-gpu,     gpu_count: 8, est_min: 183, skip_when_skip_long: true }
-          - { suite: stage-b-sglang-8-gpu,   gpu_count: 8, est_min: 205, skip_when_skip_long: true }
+          - { suite: stage-c-lora-8-gpu,     gpu_count: 8, est_min:  10, hw: cuda }
+          - { suite: stage-a-fast,           gpu_count: 0, est_min:  43, hw: cpu  }
+          - { suite: stage-b-fast-1-gpu,     gpu_count: 1, est_min:  15, hw: cuda }
+          - { suite: stage-b-short-8-gpu,    gpu_count: 8, est_min:  40, hw: cuda }
+          - { suite: stage-c-ckpt-8-gpu,     gpu_count: 8, est_min:  60, hw: cuda }
+          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, hw: cuda, partition_id: 0, partition_size: 3 }
+          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, hw: cuda, partition_id: 1, partition_size: 3 }
+          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, hw: cuda, partition_id: 2, partition_size: 3 }
+          - { suite: stage-c-long-8-gpu,     gpu_count: 8, est_min: 183, hw: cuda, skip_when_skip_long: true }
+          - { suite: stage-b-sglang-8-gpu,   gpu_count: 8, est_min: 205, hw: cuda, skip_when_skip_long: true }
     runs-on: [self-hosted, rocm, mi355x, spur]
     name: "${{ matrix.suite }}${{ matrix.partition_size && format(' [{0}/{1}]', matrix.partition_id, matrix.partition_size) || '' }} (~${{ matrix.est_min }}m)"
     timeout-minutes: 240
@@ -89,8 +90,16 @@ jobs:
           if [ -n "${{ matrix.partition_size }}" ]; then
             PARTITION_ARGS="--auto-partition-id ${{ matrix.partition_id }} --auto-partition-size ${{ matrix.partition_size }}"
           fi
-          python tests/ci/gpu_lock_exec.py --count ${{ matrix.gpu_count }} -- \
-            python tests/ci/run_suite.py --hw cuda --suite ${{ matrix.suite }} \
-              --enable-retry --max-attempts 2 \
+          HW="${{ matrix.hw || 'cuda' }}"
+          # CPU suites don't need GPU reservation; skip the gpu_lock_exec wrapper.
+          if [ "$HW" = "cpu" ]; then
+            python tests/ci/run_suite.py --hw cpu --suite ${{ matrix.suite }} \
               --continue-on-error \
               $PARTITION_ARGS
+          else
+            python tests/ci/gpu_lock_exec.py --count ${{ matrix.gpu_count }} -- \
+              python tests/ci/run_suite.py --hw cuda --suite ${{ matrix.suite }} \
+                --enable-retry --max-attempts 2 \
+                --continue-on-error \
+                $PARTITION_ARGS
+          fi
