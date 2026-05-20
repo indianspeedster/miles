@@ -98,6 +98,12 @@ def execute():
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
         "--accumulate-allreduce-grads-in-fp32 "
+        # MI355X (gfx950): hipBLASLt has no algo for the bias-fused wgrad
+        # GEMM that TE's LayerNormLinear backward uses when
+        # fuse_wgrad_accumulation=True + bias=True. Disable Megatron's
+        # gradient accumulation fusion to take the non-fused wgrad path.
+        # Repro: workspace/miles/repro_te_wgrad.py
+        "--no-gradient-accumulation-fusion "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
         "--actor-num-nodes 1 "

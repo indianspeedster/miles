@@ -1,6 +1,5 @@
 """Input batch preparation and loss function for standalone Megatron forward/backward."""
 
-from types import SimpleNamespace
 from typing import Any
 
 import torch
@@ -34,9 +33,11 @@ def prepare_batch(
     if cp_size > 1:
         from miles.backends.training_utils.cp_utils import slice_with_cp
 
+        # slice_with_cp now reads cp rank/size from get_parallel_state()
+        # directly (the cp_rank/cp_size args here mirror that, so dropping
+        # them is safe — they're only used for the older parallel_state arg).
         cp_kwargs: dict[str, object] = dict(
             pad_value=0,
-            parallel_state=SimpleNamespace(cp_rank=cp_rank, cp_size=cp_size),
             qkv_format="bshd",
             max_seq_len=seq_length,
         )

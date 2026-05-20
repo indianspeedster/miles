@@ -22,6 +22,7 @@ Importing this module is idempotent — safe to import multiple times.
 from __future__ import annotations
 
 import logging
+import os
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,13 @@ def _install_mamba_model_loss_mask_shim() -> None:
 
 def install() -> None:
     """Apply all Nemotron-H shims and register the miles bridge subclass."""
+    # The hybrid-layer shim replaces TransformerLayer._forward_attention with a
+    # wrapper. That hides the original source from inspect.getsource(), which
+    # breaks source-code patching (e.g., the run_megatron dumper). Set
+    # MILES_DISABLE_NEMOTRON_H_SHIM=1 when not training Nemotron-H to skip it.
+    if os.environ.get("MILES_DISABLE_NEMOTRON_H_SHIM") == "1":
+        logger.info("miles nemotron_h shim skipped (MILES_DISABLE_NEMOTRON_H_SHIM=1)")
+        return
     for fn in (
         _install_nemotronh_hybrid_layer_shims,
         _install_mamba_model_loss_mask_shim,

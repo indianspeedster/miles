@@ -83,6 +83,11 @@ def execute():
         "--rollout-num-gpus-per-engine 1 "
         f"--sglang-mem-fraction-static {0.55 if TIGHT_DEVICE_MEMORY else 0.65} "
         "--sglang-enable-metrics "
+        # MI355X (gfx950): sglang defaults attention_backend to 'aiter' on
+        # ROCm. Aiter JIT-compiles its attention kernels on the first request
+        # (>10s), exceeding --rollout-health-check-timeout and causing the
+        # fault-tolerance monitor to kill engines mid-warmup. Use triton.
+        "--sglang-attention-backend triton "
     )
 
     ci_args = "--ci-test "
@@ -98,6 +103,12 @@ def execute():
         "--attention-dropout 0.0 "
         "--hidden-dropout 0.0 "
         "--accumulate-allreduce-grads-in-fp32 "
+        # MI355X (gfx950): hipBLASLt has no algo for the bias-fused wgrad
+        # GEMM that TE's LayerNormLinear backward uses when
+        # fuse_wgrad_accumulation=True + bias=True. Disable Megatron's
+        # gradient accumulation fusion to take the non-fused wgrad path.
+        # Repro: workspace/miles/repro_te_wgrad.py
+        "--no-gradient-accumulation-fusion "
         "--attention-softmax-in-fp32 "
         "--attention-backend flash "
         "--actor-num-nodes 1 "
@@ -125,7 +136,15 @@ def execute():
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
         train_script="train_async.py",
-        extra_env_vars={"MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1"},
+        extra_env_vars={
+            "MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1",
+            # MI355X (gfx950): aiter JIT-compiles attention kernels on the
+            # first request (>10s), exceeding --rollout-health-check-timeout
+            # and causing the health monitor to kill engines mid-warmup.
+            # Disable aiter so sglang uses triton/torch backends (no first-
+            # request JIT compile).
+            "SGLANG_USE_AITER": "0",
+        },
     )
 
 

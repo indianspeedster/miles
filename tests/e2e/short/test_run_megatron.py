@@ -7,10 +7,18 @@
 #                                                          Re-run comparator on existing dumps
 
 import dataclasses
+import os
 import sys
 import tempfile
 from pathlib import Path
 from typing import Annotated
+
+# Disable the Nemotron-H hybrid-layer shim before any miles import: the shim
+# wraps TransformerLayer._forward_attention with a guard, which hides the
+# original source from inspect.getsource() and prevents the run_megatron
+# source patcher from injecting dumper.dump() calls. We're not training
+# Nemotron-H here, so the shim is unnecessary anyway.
+os.environ.setdefault("MILES_DISABLE_NEMOTRON_H_SHIM", "1")
 
 _MILES_ROOT: Path = Path(__file__).resolve().parents[3]
 if str(_MILES_ROOT) not in sys.path:
