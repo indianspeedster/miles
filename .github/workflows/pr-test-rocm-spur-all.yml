@@ -1,0 +1,95 @@
+name: PR Test (ROCm / Spur / All Suites)
+
+# Single-click dispatch that runs every per-commit CUDA suite on the
+# spur runner pool. Matrix entries are listed in ascending est_time so
+# fast suites finish first when only one runner is available; if
+# multiple spur runners are registered, GHA fans them out in parallel.
+#
+# The matrix grid on the run page is your status board: each row is
+# one suite (and shows ✓ / ✗ as it finishes).
+#
+# Like pr-test-rocm-spur.yml, this workflow does NOT use `container:`
+# because the runner is itself a pod (rlsys/miles:MI350-355-rocmpatch).
+
+on:
+  workflow_dispatch:
+    inputs:
+      skip_long:
+        description: 'Skip the 3+ hour suites (stage-c-long, stage-b-sglang)'
+        required: false
+        type: boolean
+        default: false
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+jobs:
+  run-suite:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { suite: stage-c-lora-8-gpu,     gpu_count: 8, est_min:  10 }
+          - { suite: stage-b-fast-1-gpu,     gpu_count: 1, est_min:  15 }
+          - { suite: stage-b-short-8-gpu,    gpu_count: 8, est_min:  40 }
+          - { suite: stage-c-ckpt-8-gpu,     gpu_count: 8, est_min:  60 }
+          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, partition_id: 0, partition_size: 3 }
+          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, partition_id: 1, partition_size: 3 }
+          - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, partition_id: 2, partition_size: 3 }
+          - { suite: stage-c-long-8-gpu,     gpu_count: 8, est_min: 183, skip_when_skip_long: true }
+          - { suite: stage-b-sglang-8-gpu,   gpu_count: 8, est_min: 205, skip_when_skip_long: true }
+    runs-on: [self-hosted, rocm, mi355x, spur]
+    name: "${{ matrix.suite }}${{ matrix.partition_size && format(' [{0}/{1}]', matrix.partition_id, matrix.partition_size) || '' }} (~${{ matrix.est_min }}m)"
+    timeout-minutes: 240
+    defaults:
+      run:
+        working-directory: ${{ github.workspace }}
+    env:
+      PYTHONPATH: ${{ github.workspace }}
+      GITHUB_COMMIT_NAME: ${{ github.sha }}_${{ github.event.pull_request.number || 'non-pr' }}
+      WANDB_API_KEY: ${{ secrets.WANDB_API_KEY }}
+      MILES_TEST_FEW_GPU: '0'
+
+    steps:
+      - name: Skip-long short-circuit
+        if: ${{ inputs.skip_long && matrix.skip_when_skip_long }}
+        run: |
+          echo "skip_long=true; bailing on ${{ matrix.suite }}"
+          exit 0
+
+      - name: Checkout repository
+        if: ${{ !(inputs.skip_long && matrix.skip_when_skip_long) }}
+        uses: actions/checkout@v4
+
+      - name: Cleanup Ray processes
+        if: ${{ !(inputs.skip_long && matrix.skip_when_skip_long) }}
+        shell: bash
+        run: |
+          pkill -9 -f 'ray::' 2>/dev/null || true
+          pkill -9 -f raylet 2>/dev/null || true
+          pkill -9 -f gcs_server 2>/dev/null || true
+          pkill -9 -f 'ray-dashboard' 2>/dev/null || true
+          pkill -9 sglang 2>/dev/null || true
+          ray stop --force 2>/dev/null || true
+          rm -rf /tmp/ray/* 2>/dev/null || true
+          sleep 3
+
+      - name: Install miles (editable)
+        if: ${{ !(inputs.skip_long && matrix.skip_when_skip_long) }}
+        shell: bash
+        run: |
+          cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
+
+      - name: Execute suite
+        if: ${{ !(inputs.skip_long && matrix.skip_when_skip_long) }}
+        shell: bash
+        run: |
+          PARTITION_ARGS=""
+          if [ -n "${{ matrix.partition_size }}" ]; then
+            PARTITION_ARGS="--auto-partition-id ${{ matrix.partition_id }} --auto-partition-size ${{ matrix.partition_size }}"
+          fi
+          python tests/ci/gpu_lock_exec.py --count ${{ matrix.gpu_count }} -- \
+            python tests/ci/run_suite.py --hw cuda --suite ${{ matrix.suite }} \
+              --enable-retry --max-attempts 2 \
+              $PARTITION_ARGS
