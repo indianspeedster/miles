@@ -1,5 +1,6 @@
 import os
 
+import torch
 from tests.ci.ci_register import register_cuda_ci
 
 import miles.utils.external_utils.command_utils as U
@@ -12,6 +13,7 @@ register_cuda_ci(est_time=2400, suite="stage-c-ckpt-8-gpu", num_gpus=8)
 ENABLE_EVAL = bool(int(os.environ.get("MILES_TEST_ENABLE_EVAL", "1")))
 TIGHT_HOST_MEMORY = bool(int(os.environ.get("MILES_TEST_TIGHT_HOST_MEMORY", "1")))
 USE_DEEPEP = bool(int(os.environ.get("MILES_TEST_USE_DEEPEP", "0")))
+IS_ROCM = torch.version.hip is not None
 
 MODEL_NAME = "GLM-4.7-Flash"
 MODEL_TYPE = "glm4.7-flash"
@@ -138,12 +140,8 @@ def execute(mode: str = "", ckpt_step: int | None = None):
         ci_args += "--ci-save-model-hash "
     if mode == "load":
         ci_args += "--ci-check-model-hash "
-    # MI355X (gfx950): with SGLANG_USE_AITER=0 forcing sglang onto triton/torch
-    # fallback paths for GLM-4.7-Flash's MoE+EAGLE init, sglang's reported
-    # logprobs diverge from the actor's recomputed logprobs by ~0.18/token —
-    # far beyond the 0.03 (or relaxed 0.1) abs_tol. Disable this secondary
-    # CI check; the primary save/load roundtrip is validated by ci-*-model-hash.
-    ci_args += "--ci-disable-logprobs-checker "
+    if IS_ROCM:
+        ci_args += "--ci-disable-logprobs-checker "
 
     misc_args = (
         "--attention-dropout 0.0 "
@@ -182,19 +180,18 @@ def execute(mode: str = "", ckpt_step: int | None = None):
         f"{misc_args} "
     )
 
+    extra_env_vars = {
+        "MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1",
+        "MILES_TEST_R3_THRESHOLD": "1.0",
+    }
+    if IS_ROCM:
+        extra_env_vars["SGLANG_USE_AITER"] = "0"
+
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=NUM_GPUS,
         megatron_model_type=MODEL_TYPE,
-        extra_env_vars={
-            "MILES_EXPERIMENTAL_ROLLOUT_REFACTOR": "1",
-            "MILES_TEST_R3_THRESHOLD": "1.0",
-            # MI355X (gfx950): aiter's MoE+EAGLE first-token kernels segfault
-            # ("Memory access fault by GPU node-N ... Reason: Unknown") during
-            # GLM-4.7-Flash sglang init. Disable aiter so sglang falls back to
-            # the triton/torch paths for these kernels.
-            "SGLANG_USE_AITER": "0",
-        },
+        extra_env_vars=extra_env_vars,
     )
 
 

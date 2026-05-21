@@ -45,11 +45,18 @@ def convert_checkpoint(
             "--master-addr {{master_addr}} " "--master-port 23456 " "--nnodes={{nnodes}} " "--node-rank {{node_rank}} "
         )
 
+    rocm_env = ""
+    if os.path.exists("/opt/rocm"):
+        for var in ("NVTE_FUSED_ATTN", "NVTE_FLASH_ATTN", "NVTE_UNFUSED_ATTN"):
+            os.environ.pop(var, None)
+        rocm_env = "unset NVTE_FUSED_ATTN NVTE_FLASH_ATTN NVTE_UNFUSED_ATTN && "
+
     if multinode:
         fn = partial(exec_command_all_ray_node, num_nodes=num_nodes)
     else:
         fn = exec_command
     fn(
+        f"{rocm_env}"
         f"source {repo_base_dir}/scripts/models/{megatron_model_type}.sh && "
         f"PYTHONPATH={megatron_path} "
         f"torchrun "
@@ -112,6 +119,20 @@ def execute_train(
         train_script = f"{repo_base_dir}/{train_script}"
     external_ray = get_bool_env_var("MILES_SCRIPT_EXTERNAL_RAY")
     master_addr = os.environ.get("MASTER_ADDR", "127.0.0.1")
+    is_rocm = _is_rocm_host()
+    rocm_visible_device_env_vars = (
+        {k: os.environ[k] for k in ("HIP_VISIBLE_DEVICES",) if k in os.environ} if is_rocm else {}
+    )
+    rocm_ray_env_vars = (
+        {
+            "RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES": "1",
+            "RAY_EXPERIMENTAL_NOSET_ROCR_VISIBLE_DEVICES": "1",
+        }
+        if rocm_visible_device_env_vars
+        else {}
+    )
+    # Ray on ROCm must see only HIP visible-device state.
+    ray_env_prefix = "unset CUDA_VISIBLE_DEVICES; " if rocm_visible_device_env_vars else ""
 
     train_backend_fsdp = "--train-backend fsdp" in train_args
     assert train_backend_fsdp == (megatron_model_type is None)
@@ -133,10 +154,22 @@ def execute_train(
         "true; "
     )
 
+    rocm_env = ""
+    if os.path.exists("/opt/rocm"):
+        for var in ("NVTE_FUSED_ATTN", "NVTE_FLASH_ATTN", "NVTE_UNFUSED_ATTN"):
+            os.environ.pop(var, None)
+        os.environ.setdefault("RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES", "1")
+        os.environ.setdefault("HIP_VISIBLE_DEVICES", ",".join(str(i) for i in range(num_gpus_per_node)))
+        rocm_env = (
+            f"unset NVTE_FUSED_ATTN NVTE_FLASH_ATTN NVTE_UNFUSED_ATTN && "
+            f"export RAY_EXPERIMENTAL_NOSET_HIP_VISIBLE_DEVICES=1 && "
+            f"export HIP_VISIBLE_DEVICES={os.environ['HIP_VISIBLE_DEVICES']} && "
+        )
+
     if not external_ray:
         exec_command(
             # will prevent ray from buffering stdout/stderr
-            f"export PYTHONBUFFERED=16 && "
+            f"{ray_env_prefix}export PYTHONBUFFERED=16 && "
             f"ray start --head --node-ip-address {master_addr} --num-gpus {num_gpus_per_node} --disable-usage-stats"
         )
 
@@ -160,6 +193,8 @@ def execute_train(
                 "no_proxy": f"127.0.0.1,{master_addr}",
                 # This is needed by megatron / torch distributed in multi-node setup
                 "MASTER_ADDR": master_addr,
+                **rocm_visible_device_env_vars,
+                **rocm_ray_env_vars,
                 **(
                     {
                         "CUDA_ENABLE_COREDUMP_ON_EXCEPTION": "1",
@@ -183,7 +218,7 @@ def execute_train(
             else ""
         )
         exec_command(
-            f"export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
+            f"{ray_env_prefix}export no_proxy=127.0.0.1 && export PYTHONBUFFERED=16 && "
             f"{cmd_megatron_model_source}"
             f"""ray job submit {'' if 'RAY_ADDRESS' in os.environ else '--address="http://127.0.0.1:8265" '}"""
             f"--runtime-env-json='{runtime_env_json}' "
@@ -191,6 +226,10 @@ def execute_train(
             f"{'${MODEL_ARGS[@]}' if megatron_model_type is not None else ''} "
             f"{train_args}"
         )
+
+
+def _is_rocm_host() -> bool:
+    return os.path.exists("/dev/kfd")
 
 
 def _parse_extra_env_vars(text: str):

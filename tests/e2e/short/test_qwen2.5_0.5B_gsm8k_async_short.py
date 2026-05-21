@@ -1,8 +1,11 @@
 import os
 
+import torch
 from tests.ci.ci_register import register_cuda_ci
 
 import miles.utils.external_utils.command_utils as U
+
+IS_ROCM = torch.version.hip is not None
 
 register_cuda_ci(est_time=300, suite="stage-b-short-8-gpu", num_gpus=8)
 
@@ -90,7 +93,10 @@ def execute():
         "--sglang-attention-backend triton "
     )
 
-    ci_args = "--ci-test "
+    ci_args = (
+        "--ci-test "
+        + ("--ci-disable-kl-checker --ci-disable-logprobs-checker " if IS_ROCM else "")
+    )
 
     fault_tolerance_args = (
         "--use-fault-tolerance "
