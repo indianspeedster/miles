@@ -35,6 +35,7 @@ jobs:
           - { suite: stage-b-fast-1-gpu,     gpu_count: 1, est_min:  15, hw: cuda }
           - { suite: stage-b-short-8-gpu,    gpu_count: 8, est_min:  40, hw: cuda }
           - { suite: stage-c-ckpt-8-gpu,     gpu_count: 8, est_min:  60, hw: cuda }
+          - { suite: stage-c-glm5-8-gpu-rocm, gpu_count: 8, est_min: 30, hw: cuda }
           - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, hw: cuda, partition_id: 0, partition_size: 3 }
           - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, hw: cuda, partition_id: 1, partition_size: 3 }
           - { suite: stage-c-megatron-8-gpu, gpu_count: 8, est_min:  57, hw: cuda, partition_id: 2, partition_size: 3 }
