@@ -202,24 +202,18 @@ class RolloutServer:
             await asyncio.gather(*all_handles)
 
         release_handles = []
-        updatable_new_engines = []
-        non_updatable_groups_engines: list[tuple[str, list]] = []
+        all_resume_engines = []
         for g, dead_indices in zip(self.server_groups, dead_per_group, strict=True):
             logger.info(f"Recovered {g.num_new_engines} dead rollout engines (worker_type={g.worker_type})")
             assert g.num_new_engines == len(dead_indices), "num_new_engines does not match dead_indices length"
             if g.needs_offload and dead_indices:
                 new_engines = [g.all_engines[i] for i in dead_indices]
                 release_handles.extend(engine.release_memory_occupation.remote() for engine in new_engines)
-                if self.update_weights:
-                    updatable_new_engines.extend(new_engines)
-                elif g.model_path:
-                    non_updatable_groups_engines.append((g.model_path, new_engines))
+                if self.update_weights or g.model_path:
+                    all_resume_engines.extend(new_engines)
 
         if release_handles:
             await asyncio.gather(*release_handles)
-            all_resume_engines = updatable_new_engines[:]
-            for _model_path, engines in non_updatable_groups_engines:
-                all_resume_engines.extend(engines)
             if all_resume_engines:
                 await asyncio.gather(
                     *[
