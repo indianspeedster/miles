@@ -189,7 +189,7 @@ class RolloutManager:
     def get_updatable_engines_and_lock(self):
         """Return engines eligible for weight updates."""
         srv = self._get_updatable_server()
-        engines = srv.engines if srv else []
+        engines = [e.actor_handle for e in srv.engines] if srv else []
         gpu_counts = srv.engine_gpu_counts if srv else []
         gpu_offsets = srv.engine_gpu_offsets if srv else []
         has_new = srv.has_new_engines if srv else False
@@ -265,11 +265,15 @@ class RolloutManager:
         # Only inject fault once
         self._ci_fault_injection_pending = False
 
-        if self._server and self._server.server_groups[0].all_engines and self._server.server_groups[0].all_engines[0]:
+        if (
+            self._server
+            and self._server.server_groups[0].all_engines
+            and self._server.server_groups[0].all_engines[0].is_allocated
+        ):
             logger.info("CI Fault Injection: Simulating crash on engine 0 during generate")
             try:
                 # This will cause the ray actor to exit
-                self._server.server_groups[0].all_engines[0].simulate_crash.remote()
+                self._server.server_groups[0].all_engines[0].actor_handle.simulate_crash.remote()
                 # Wait for health monitor to detect the crash and mark engine as None
                 # health_check_interval + health_check_timeout + buffer
                 wait_time = self.args.rollout_health_check_interval + self.args.rollout_health_check_timeout + 5

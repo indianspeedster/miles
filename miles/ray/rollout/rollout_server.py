@@ -7,6 +7,7 @@ import ray
 from miles.backends.sglang_utils.sglang_config import ModelConfig, ServerGroupConfig, SglangConfig
 from miles.ray.rollout.addr_allocator import PortCursors
 from miles.ray.rollout.router_manager import start_router
+from miles.ray.rollout.server_engine import ServerEngine
 from miles.ray.rollout.server_group import ServerGroup
 
 logger = logging.getLogger(__name__)
@@ -58,7 +59,9 @@ def start_rollout_servers(args, pg) -> dict[str, "RolloutServer"]:
             group = ServerGroup(
                 args=args,
                 pg=pg,
-                all_engines=[None] * num_engines if group_cfg.worker_type != "placeholder" else [],
+                all_engines=(
+                    [ServerEngine() for _ in range(num_engines)] if group_cfg.worker_type != "placeholder" else []
+                ),
                 num_gpus_per_engine=gpus_per_engine,
                 has_new_engines=False,
                 worker_type=group_cfg.worker_type,
@@ -154,7 +157,7 @@ class RolloutServer:
     update_weights: bool = True
 
     @property
-    def engines(self):
+    def engines(self) -> list[ServerEngine]:
         """All node-0 engines across all groups."""
         return [e for g in self.server_groups for e in g.engines]
 

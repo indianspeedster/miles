@@ -144,12 +144,12 @@ class RolloutHealthMonitor:
             self._check_engine_health(rollout_engine_id, engine)
 
     def _check_engine_health(self, rollout_engine_id, engine) -> None:
-        if engine is None:
+        if not engine.is_allocated:
             logger.info(f"Skipping health check for engine {rollout_engine_id} (None)")
             return
 
         try:
-            ray.get(engine.health_generate.remote(timeout=self._check_timeout))
+            ray.get(engine.actor_handle.health_generate.remote(timeout=self._check_timeout))
         except Exception as e:
             logger.error(
                 f"Health check failed for rollout engine {rollout_engine_id} (ray timeout or error). Killing actor. Exception: {e}"
