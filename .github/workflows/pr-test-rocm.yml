@@ -3,7 +3,13 @@ name: PR Test (ROCm)
 
 # ROCm counterpart to pr-test.yml. Same structure, different GPU stage:
 # calls _run-ci-rocm.yml instead of _run-ci.yml, using the ROCm container
-# with HIP/CUDA compatibility to run the same CUDA-registered test suites.
+# with HIP/CUDA compatibility.
+#
+# Test selection is explicit rather than inherited from the CUDA suites:
+# the stage dispatches --hw rocm --suite stage-c-8-gpu-mi300x, so a test
+# runs here only if it carries a matching register_rocm_ci() call. That
+# makes enabling/disabling a test on MI300X a one-line change in the test
+# file, independent of its CUDA registration.
 #
 # Currently workflow_dispatch-only while the MI300x runner is being
 # stabilized. Before adding `pull_request:` or `schedule:` triggers, gate
@@ -60,7 +66,7 @@ jobs:
       runs_on: '["self-hosted", "rocm", "mi300x", "8gpu"]'
       container_image: ${{ needs.resolve-ci-image.outputs.container_image }}
       execute_command: >-
-        python tests/ci/run_suite.py --hw cuda --suite stage-c-8-gpu-h100
+        python tests/ci/run_suite.py --hw rocm --suite stage-c-8-gpu-mi300x
         --match-all-labels
         --enable-retry --max-attempts 2
     secrets: inherit
