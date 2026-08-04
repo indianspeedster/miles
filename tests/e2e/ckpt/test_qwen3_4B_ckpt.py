@@ -6,6 +6,7 @@ import miles.utils.external_utils.command_utils as U
 
 register_cuda_ci(est_time=1400, suite="stage-c-8-gpu-h100", labels=["ckpt"])
 register_rocm_ci(est_time=1200, suite="stage-c-8-gpu-mi350", labels=["ckpt"])
+register_rocm_ci(est_time=1200, suite="stage-c-8-gpu-mi300x", labels=["ckpt"])
 
 ENABLE_EVAL = bool(int(os.environ.get("MILES_TEST_ENABLE_EVAL", "1")))
 

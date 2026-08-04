@@ -7,7 +7,7 @@ from scripts.run_glm5_744b_a40b import (
     _prepare_megatron_ckpt,
     _validate_glm_checkpoint,
 )
-from tests.ci.ci_register import register_cuda_ci
+from tests.ci.ci_register import register_cuda_ci, register_rocm_ci
 from tests.ci.metric_history import register_ci_gate
 
 import miles.utils.external_utils.command_utils as U
@@ -20,6 +20,11 @@ import miles.utils.external_utils.command_utils as U
 register_cuda_ci(
     est_time=1400,
     suite="stage-c-2-gpu-h200",
+    labels=["megatron", "model-scripts", "replay"],
+)
+register_rocm_ci(
+    est_time=1400,
+    suite="stage-c-8-gpu-mi300x",
     labels=["megatron", "model-scripts", "replay"],
 )
 
