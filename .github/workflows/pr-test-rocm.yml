@@ -7,17 +7,20 @@ name: PR Test (ROCm)
 #
 # Test selection is explicit rather than inherited from the CUDA suites. The
 # shared CI policy selects matching register_rocm_ci() labels for PR/nightly
-# runs; manual dispatch keeps the full regular MI300X suite.
+# runs; manual dispatch keeps the full regular suite.
 #
-# Two stages, one per GPU family: stage-c-4-gpu-mi300x and
-# stage-c-4-gpu-mi350. Both hosts are split into two 4-GPU runners, so each
-# stage is 4-GPU and runs in two est_time-balanced shards. CUDA tests that
-# need 8 GPUs get a standalone test_amd_<name>.py with its own 4-GPU
-# CaseConfig rather than an IS_HIP branch in the original.
+# One stage: stage-c-8-gpu-mi350, on a single full-node 8-GPU MI350X runner.
+# Because there is exactly one runner there is no shard matrix -- the suite
+# runs start to finish in one job. The 8-GPU width means CUDA tests needing 8
+# GPUs run as-written, without the standalone 4-GPU test_amd_<name>.py variants
+# the split MI300X fleet required.
 #
-# The two families run different rocm/sgl-dev lines, so resolve-ci-image
-# emits one image per family: MI300X is pinned, MI350 resolves to the newest
-# dated tag because that line is rebuilt daily.
+# The MI300X stage is deliberately absent: this fork serves no MI300X runner,
+# and a job whose runs_on matches nothing queues indefinitely rather than
+# failing, which would stall every dispatch.
+#
+# resolve-ci-image emits the MI350 image only, resolved to the newest dated
+# rocm720-mi35x tag because that line is rebuilt daily and a pinned date rots.
 #
 # pull_request_target keeps the workflow and fork authorization on the trusted
 # base branch. A fork reaches the privileged self-hosted stage only after a
@@ -39,11 +42,6 @@ on:
     - cron: '0 15 * * *'
   workflow_dispatch:
     inputs:
-      ci_image_tag_mi300x:
-        description: 'MI300X image tag (default: miles-rocm700-mi30x-20260708)'
-        required: false
-        type: string
-        default: 'miles-rocm700-mi30x-20260708'
       ci_image_tag_mi350:
         description: 'MI350 image tag (default: newest miles-rocm720-mi35x-<date> within 7 days)'
         required: false
@@ -98,14 +96,12 @@ jobs:
   resolve-ci-image:
     runs-on: ubuntu-latest
     outputs:
-      mi300x_image: ${{ steps.resolve.outputs.mi300x_image }}
       mi350_image: ${{ steps.resolve.outputs.mi350_image }}
     steps:
-      - name: Resolve CI images
+      - name: Resolve CI image
         id: resolve
         shell: bash
         env:
-          INPUT_TAG_MI300X: ${{ github.event.inputs.ci_image_tag_mi300x || '' }}
           INPUT_TAG_MI350: ${{ github.event.inputs.ci_image_tag_mi350 || '' }}
         run: |
           set -euo pipefail
@@ -118,12 +114,6 @@ jobs:
               exit 1
             fi
           }
-
-          # MI300X: pinned. The rocm700/mi30x line is not rebuilt on a schedule,
-          # so a fixed date is reproducible rather than stale.
-          TAG_MI300X="${INPUT_TAG_MI300X:-}"
-          [ -z "$TAG_MI300X" ] && TAG_MI300X="miles-rocm700-mi30x-20260708"
-          validate_tag "$TAG_MI300X" "ci_image_tag_mi300x"
 
           # MI350: newest dated tag. The rocm720/mi35x line is rebuilt daily, so
           # pinning a date rots within days. `manifest inspect` is a read-only
@@ -147,63 +137,31 @@ jobs:
             fi
           fi
 
-          echo "mi300x_image=${REPO}:${TAG_MI300X}" >> "$GITHUB_OUTPUT"
           echo "mi350_image=${REPO}:${TAG_MI350}" >> "$GITHUB_OUTPUT"
-          echo "Resolved MI300X image: ${REPO}:${TAG_MI300X}"
-          echo "Resolved MI350 image:  ${REPO}:${TAG_MI350}"
+          echo "Resolved MI350 image: ${REPO}:${TAG_MI350}"
 
-  stage-c-4-gpu-mi300x:
+  stage-c-8-gpu-mi350:
     needs: [resolve-ci-policy, resolve-ci-image]
     if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'
-    # One shard per 4-GPU runner, so the pair works the suite in parallel.
-    # run_suite.py balances the shards by est_time. fail-fast: false so one
-    # shard's failure does not cancel the other mid-run.
-    strategy:
-      fail-fast: false
-      matrix:
-        partition_id: [0, 1]
-    uses: ./.github/workflows/_run-ci-rocm.yml
-    with:
-      runs_on: '["self-hosted", "amd", "mi300x", "4gpu"]'
-      container_image: ${{ needs.resolve-ci-image.outputs.mi300x_image }}
-      checkout_ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
-      execute_command: >-
-        python tests/ci/run_suite.py --hw rocm --suite stage-c-4-gpu-mi300x
-        --auto-partition-id ${{ matrix.partition_id }} --auto-partition-size 2
-        --cadence ${{ needs.resolve-ci-policy.outputs.cadence }}
-        --labels ${{ needs.resolve-ci-policy.outputs.raw_labels }}
-        ${{ github.event_name == 'workflow_dispatch' && '--match-all-labels' || '' }}
-        --enable-retry --max-attempts 2
-    secrets:
-      WANDB_API_KEY: ${{ (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.WANDB_API_KEY || '' }}
-
-  stage-c-4-gpu-mi350:
-    needs: [resolve-ci-policy, resolve-ci-image]
-    if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'
-    # Same shape as the MI300X stage: the MI350X host is likewise split into
-    # two 4-GPU runners, so one shard each. run_suite.py balances by est_time.
+    # No shard matrix: this fork serves exactly one MI350X runner, and it owns
+    # the whole 8-GPU node. Sharding across one runner would only serialise the
+    # suite behind an extra job. --auto-partition-* is therefore omitted, so
+    # run_suite.py runs every collected test in this single job.
     #
-    # Unlike the MI300X stage this passes --continue-on-error unconditionally.
-    # test_qwen3_30B_A3B/test_baseline.py currently fails this suite on MI350
-    # (log-prob tolerance; it fails the external SGLang nightly too), and
-    # halting on it would hide the other five tests. A failing test still
-    # fails the job -- the flag only controls how far the run gets.
-    strategy:
-      fail-fast: false
-      matrix:
-        partition_id: [0, 1]
+    # The suite is deliberately two tests -- test_mtp1_spec_v2_r3 (8 GPU) and
+    # test_inkling_small_4layer_ci (4 GPU) -- so no --continue-on-error: with
+    # this few tests, halting on the first failure loses nothing worth seeing
+    # and surfaces the failure faster.
     uses: ./.github/workflows/_run-ci-rocm.yml
     with:
-      runs_on: '["self-hosted", "amd", "mi350", "4gpu"]'
+      runs_on: '["self-hosted", "amd", "mi350", "8gpu"]'
       container_image: ${{ needs.resolve-ci-image.outputs.mi350_image }}
       checkout_ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       execute_command: >-
-        python tests/ci/run_suite.py --hw rocm --suite stage-c-4-gpu-mi350
-        --auto-partition-id ${{ matrix.partition_id }} --auto-partition-size 2
+        python tests/ci/run_suite.py --hw rocm --suite stage-c-8-gpu-mi350
         --cadence ${{ needs.resolve-ci-policy.outputs.cadence }}
         --labels ${{ needs.resolve-ci-policy.outputs.raw_labels }}
         ${{ github.event_name == 'workflow_dispatch' && '--match-all-labels' || '' }}
-        --continue-on-error
         --enable-retry --max-attempts 2
     secrets:
       WANDB_API_KEY: ${{ (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.WANDB_API_KEY || '' }}

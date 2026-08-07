@@ -329,13 +329,15 @@ class TestRocmWorkflowScopeSeam:
 
     def test_stage_consumes_policy_and_preserves_manual_full_scope(self):
         workflow = self._workflow()
-        stage = workflow.split("  stage-c-4-gpu-mi300x:", 1)[1]
+        stage = workflow.split("  stage-c-8-gpu-mi350:", 1)[1]
         command = stage.split("execute_command:", 1)[1].split("secrets:", 1)[0]
 
         assert "needs: [resolve-ci-policy, resolve-ci-image]" in stage
         assert "if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'" in stage
-        assert "partition_id: [0, 1]" in stage
-        assert "--auto-partition-size 2" in command
+        # One runner means no shard matrix; partitioning across a single runner
+        # would only serialise the suite behind an extra job.
+        assert "partition_id:" not in stage
+        assert "--auto-partition" not in command
         assert "format('refs/pull/{0}/merge', github.event.pull_request.number)" in stage
         assert "--cadence ${{ needs.resolve-ci-policy.outputs.cadence }}" in command
         assert "--labels ${{ needs.resolve-ci-policy.outputs.raw_labels }}" in command
@@ -353,45 +355,48 @@ class TestRocmWorkflowScopeSeam:
         assert "ref: ${{ inputs.checkout_ref }}" in reusable
         assert "persist-credentials: false" in reusable
 
-    def test_each_gpu_family_gets_its_own_image(self):
-        """The two ROCm stages run different rocm/sgl-dev lines, so one shared
-        `container_image` output would silently run MI350 tests on the MI300X
-        image (ROCm 7.0 vs 7.2, gfx942 vs gfx950)."""
+    def test_mi350_image_is_resolved_not_pinned(self):
+        """The rocm720/mi35x line is rebuilt daily, so a pinned date rots within
+        days; the resolver probes back through recent dates instead."""
         workflow = self._workflow()
         resolver = workflow.split("resolve-ci-image:", 1)[1].split("  stage-c-", 1)[0]
 
-        assert "mi300x_image: ${{ steps.resolve.outputs.mi300x_image }}" in resolver
         assert "mi350_image: ${{ steps.resolve.outputs.mi350_image }}" in resolver
-        # A single generic output would let a stage bind the wrong family.
+        # A single generic output would let a stage bind the wrong family if a
+        # second GPU family is ever added back.
         assert "container_image: ${{ steps.resolve.outputs.container_image }}" not in workflow
-
-        mi300x = workflow.split("  stage-c-4-gpu-mi300x:", 1)[1].split("  stage-c-4-gpu-mi350:", 1)[0]
-        mi350 = workflow.split("  stage-c-4-gpu-mi350:", 1)[1]
-        assert "container_image: ${{ needs.resolve-ci-image.outputs.mi300x_image }}" in mi300x
-        assert "container_image: ${{ needs.resolve-ci-image.outputs.mi350_image }}" in mi350
-
-        # MI300X pins a dated tag; MI350 is rebuilt daily so it probes for the
-        # newest instead. A pinned MI350 default would rot within days.
-        assert 'TAG_MI300X="miles-rocm700-mi30x-20260708"' in resolver
         assert "BASE=miles-rocm720-mi35x" in resolver
         assert "docker manifest inspect" in resolver
 
-    def test_mi350_stage_matches_its_runner_fleet(self):
-        """The MI350X host is split into two 4-GPU runners labelled amd/mi350/4gpu."""
+        stage = workflow.split("  stage-c-8-gpu-mi350:", 1)[1]
+        assert "container_image: ${{ needs.resolve-ci-image.outputs.mi350_image }}" in stage
+
+    def test_no_stage_targets_a_fleet_this_fork_lacks(self):
+        """A job whose runs_on matches no registered runner queues indefinitely
+        rather than failing, stalling every dispatch. This fork serves one 8-GPU
+        MI350X runner, so no MI300X or 4-GPU MI350 stage may exist."""
         workflow = self._workflow()
-        stage = workflow.split("  stage-c-4-gpu-mi350:", 1)[1]
+        assert "stage-c-4-gpu-mi300x" not in workflow
+        assert "stage-c-4-gpu-mi350" not in workflow
+        assert '"mi300x"' not in workflow
+        assert '"4gpu"' not in workflow
+
+    def test_mi350_stage_matches_its_runner_fleet(self):
+        """One full-node 8-GPU MI350X runner, labelled amd/mi350/8gpu."""
+        workflow = self._workflow()
+        stage = workflow.split("  stage-c-8-gpu-mi350:", 1)[1]
         command = stage.split("execute_command:", 1)[1].split("secrets:", 1)[0]
 
-        assert 'runs_on: \'["self-hosted", "amd", "mi350", "4gpu"]\'' in stage
-        assert "--suite stage-c-4-gpu-mi350" in command
-        # One shard per runner; size must track the matrix or a shard runs nothing.
-        assert "partition_id: [0, 1]" in stage
-        assert "--auto-partition-size 2" in command
+        assert 'runs_on: \'["self-hosted", "amd", "mi350", "8gpu"]\'' in stage
+        assert "--suite stage-c-8-gpu-mi350" in command
+        # A shard matrix over a single runner buys nothing and serialises the run.
+        assert "partition_id:" not in stage
+        assert "--auto-partition" not in command
         assert "if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'" in stage
         assert "format('refs/pull/{0}/merge', github.event.pull_request.number)" in stage
-        # A known-failing test in this suite would otherwise halt the shard and
-        # hide the rest; the flag does not stop a failure from failing the job.
-        assert "--continue-on-error" in command
+        # The suite is two tests; halting on the first failure surfaces it sooner
+        # than grinding through the rest.
+        assert "--continue-on-error" not in command
 
 
 # --- CLI seam: local nightly alias and invalid-suite exit behavior -----------

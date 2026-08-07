@@ -12,9 +12,13 @@ register_cuda_ci(
     suite="stage-c-4-gpu-h200",
     labels=["megatron", "model-scripts"],
 )
+# Runs on the 8-GPU MI350 runner even though the case itself is 4-GPU (see
+# _args): that runner is the only ROCm hardware this fork serves, so the suite
+# name states the runner width rather than this test's requirement. The 4 spare
+# GPUs idle for the ~9 minutes it takes.
 register_rocm_ci(
     est_time=1800,
-    suite="stage-c-4-gpu-mi300x",
+    suite="stage-c-8-gpu-mi350",
     labels=["megatron", "model-scripts", "amd"],
 )
 

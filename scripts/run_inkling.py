@@ -62,6 +62,7 @@ import os
 from dataclasses import dataclass, field
 from typing import Literal
 
+import torch
 import typer
 
 import miles.utils.external_utils.command_utils as U
@@ -348,8 +349,13 @@ def _train(args: ScriptArgs):
         if args.rollout_num_gpus_per_engine >= 16:
             sglang_args += "--no-offload-rollout --no-offload-train "
 
+    # FA4 is NVIDIA-only (the kernel imports cutlass), so on ROCm the engine dies
+    # during CUDA-graph capture. sglang's inkling attention asserts the backend is
+    # one of ("fa4", "triton") -- see srt/models/inkling_common/attn.py -- so triton
+    # is the only ROCm-viable value. aiter is not an escape hatch from that assert.
+    attention_backend = "triton" if torch.version.hip else "fa4"
     sglang_args += (
-        "--sglang-attention-backend fa4 "
+        f"--sglang-attention-backend {attention_backend} "
         "--sglang-moe-runner-backend triton "
         "--sglang-mamba-scheduler-strategy extra_buffer "
         "--sglang-enable-multimodal "
