@@ -16,10 +16,17 @@ Spec (EAGLE) and spec-v2 (mamba scheduler) are on for the whole suite; R3 is per
 import os
 from dataclasses import dataclass
 
+import torch
+
 import miles.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3.5-35B-A3B"
 MODEL_TYPE = "qwen3.5-35B-A3B"
+
+# Both ROCm branches below are workarounds for environment gaps, not for anything
+# this suite is trying to test. Each is scoped to HIP so the CUDA cases -- the
+# reference configuration -- keep running exactly as before.
+_IS_HIP = torch.version.hip is not None
 
 
 @dataclass
@@ -165,7 +172,12 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
         "--actor-num-nodes 1 "
         f"--actor-num-gpus-per-node {case.num_gpus_per_node} "
         "--colocate "
-        "--moe-token-dispatcher-type flex "
+        # Megatron's flex dispatcher constructs _DeepepManager unconditionally
+        # (token_dispatcher.py), and deep_ep is not installed in the rocm/sgl-dev
+        # image, so flex raises ImportError at MoELayer build time on ROCm.
+        # alltoall is the same fallback the other MoE suites reach for via their
+        # use_deepep=False path. Drop this branch once the image ships deep_ep.
+        f"--moe-token-dispatcher-type {'alltoall' if _IS_HIP else 'flex'} "
     )
 
     train_args = (
@@ -186,9 +198,23 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
 
 def execute(case: CaseConfig, *, wandb_file: str) -> None:
     train_args = build_train_args(case, wandb_file=wandb_file)
+    extra_env_vars = {"SGLANG_ENABLE_SPEC_V2": "1"}
+    if _IS_HIP:
+        # TODO(sglang): drop once RoutedExpertsCapturer stops reserving fused
+        # shared-expert columns for models that append them outside the capture
+        # site. It sizes its device buffer topk + model.num_fused_shared_experts
+        # (state_capturer/routed_experts.py), but Qwen2/Qwen3.5 MoE builds TopK
+        # without num_fused_shared_experts and appends the shared column after
+        # select_experts returns (models/qwen2_moe.py _append_shared_to_topk_output).
+        # The capture site therefore only ever sees topk columns, so the write is
+        # 8 wide into a 9 wide slice and CUDA-graph capture dies. Only reachable
+        # where shared-expert fusion is on, i.e. _use_aiter on ROCm -- which is
+        # why CUDA never hits it. Turning aiter off also disables that fusion in
+        # the rollout engine, so this costs MoE rollout throughput on ROCm.
+        extra_env_vars["SGLANG_USE_AITER"] = "0"
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=case.num_gpus_per_node,
         megatron_model_type=MODEL_TYPE,
-        extra_env_vars={"SGLANG_ENABLE_SPEC_V2": "1"},
+        extra_env_vars=extra_env_vars,
     )
