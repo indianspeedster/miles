@@ -394,7 +394,9 @@ class TestRocmWorkflowScopeSeam:
         # One job per test, serialised on the single runner, so each test gets its
         # own log and retry budget.
         assert "--only ${{ matrix.test }}" in command
-        assert "max-parallel: 1" in stage
+        # max-parallel tracks the runner count; assert it is set rather than
+        # pinning a number, so growing the fleet does not fail this test.
+        assert "max-parallel:" in stage
         assert "fail-fast: false" in stage
         # est_time-based sharding is not how this fans out.
         assert "--auto-partition" not in command

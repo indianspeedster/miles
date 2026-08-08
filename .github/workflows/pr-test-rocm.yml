@@ -138,18 +138,22 @@ jobs:
   stage-c-8-gpu-mi350:
     needs: [resolve-ci-policy, resolve-ci-image]
     if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'
-    # One job per test rather than one job for the suite. The fork has a single
-    # 8-GPU runner, so max-parallel: 1 serialises them anyway -- the win is that
-    # each test gets its own job log (readable live, instead of waiting for one
-    # multi-hour job to archive), its own retry budget, and can be cancelled
-    # without killing the rest.
+    # One job per test rather than one job for the suite: each test gets its own
+    # job log (readable live, instead of waiting for one multi-hour job to
+    # archive), its own retry budget, and can be cancelled without killing the
+    # rest.
+    #
+    # max-parallel matches the runner count (2x 8-GPU MI350X). Each test wants a
+    # whole node, so going above the runner count would only queue jobs, and
+    # going below would idle a runner. Bump this in step with the fleet.
     #
     # Matrix order is deliberate, not alphabetical: the two that failed the last
-    # full run go first, so a regression surfaces in minutes instead of hours.
+    # full run go first, so a regression surfaces in minutes instead of hours --
+    # and with max-parallel: 2 those two start immediately, in parallel.
     # fail-fast: false so one red test does not cancel the queue.
     strategy:
       fail-fast: false
-      max-parallel: 1
+      max-parallel: 2
       matrix:
         test:
           - tests/e2e/megatron/test_qwen3_5_35B_A3B_mtp/test_mtp1_spec_v2_r3.py
