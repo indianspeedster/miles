@@ -43,7 +43,7 @@ on:
   workflow_dispatch:
     inputs:
       ci_image_tag_mi350:
-        description: 'MI350 image tag (default: newest miles-rocm720-mi35x-<date> within 7 days)'
+        description: 'MI350 image tag (default: pinned miles-rocm720-mi35x-20260806)'
         required: false
         type: string
         default: ''
@@ -115,27 +115,22 @@ jobs:
             fi
           }
 
-          # MI350: newest dated tag. The rocm720/mi35x line is rebuilt daily, so
-          # pinning a date rots within days. `manifest inspect` is a read-only
-          # existence probe -- it does not pull the multi-GB image, and
-          # rocm/sgl-dev serves it without registry credentials.
+          # MI350: PINNED, not resolved to the newest dated tag.
+          #
+          # The resolver used to walk back from today and take the newest build. That
+          # silently moved the image mid-investigation and cost hours: 20260807 broke
+          # bit-exact weight-sync agreement on test_mtp1_spec_v2_r3, pushing the
+          # first-step invariant abs(train/ppo_kl) < 1e-9 from 0.0 (20260806) to
+          # -2.4e-09..-8.5e-09, reproduced on two separate MI350X hosts. Every other
+          # metric stayed healthy, so it reads as a narrow numerical regression in the
+          # baked sglang/Megatron/aiter versions.
+          #
+          # A silently-moving image also makes any failure ambiguous: you cannot tell
+          # a code regression from an image regression. Bump this date deliberately,
+          # after checking the suite still passes on it.
           TAG_MI350="${INPUT_TAG_MI350:-}"
-          if [ -n "$TAG_MI350" ]; then
-            validate_tag "$TAG_MI350" "ci_image_tag_mi350"
-          else
-            BASE=miles-rocm720-mi35x
-            for i in $(seq 0 6); do
-              CANDIDATE="${BASE}-$(date -u -d "-${i} day" +%Y%m%d)"
-              if docker manifest inspect "${REPO}:${CANDIDATE}" >/dev/null 2>&1; then
-                TAG_MI350="$CANDIDATE"
-                break
-              fi
-            done
-            if [ -z "$TAG_MI350" ]; then
-              echo "::error::no ${REPO}:${BASE}-<date> image found in the last 7 days"
-              exit 1
-            fi
-          fi
+          [ -z "$TAG_MI350" ] && TAG_MI350="miles-rocm720-mi35x-20260806"
+          validate_tag "$TAG_MI350" "ci_image_tag_mi350"
 
           echo "mi350_image=${REPO}:${TAG_MI350}" >> "$GITHUB_OUTPUT"
           echo "Resolved MI350 image: ${REPO}:${TAG_MI350}"
@@ -143,16 +138,29 @@ jobs:
   stage-c-8-gpu-mi350:
     needs: [resolve-ci-policy, resolve-ci-image]
     if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'
-    # No shard matrix: this fork serves exactly one MI350X runner, and it owns
-    # the whole 8-GPU node. Sharding across one runner would only serialise the
-    # suite behind an extra job. --auto-partition-* is therefore omitted, so
-    # run_suite.py runs every collected test in this single job.
+    # One job per test rather than one job for the suite. The fork has a single
+    # 8-GPU runner, so max-parallel: 1 serialises them anyway -- the win is that
+    # each test gets its own job log (readable live, instead of waiting for one
+    # multi-hour job to archive), its own retry budget, and can be cancelled
+    # without killing the rest.
     #
-    # --continue-on-error unconditionally: the suite is 8 tests being brought up
-    # on ROCm for the first time, several of which are expected to be shaky, and
-    # halting on the first failure would hide the other seven for a full run's
-    # wall-clock. A failing test still fails the job -- the flag only controls
-    # how far the run gets.
+    # Matrix order is deliberate, not alphabetical: the two that failed the last
+    # full run go first, so a regression surfaces in minutes instead of hours.
+    # fail-fast: false so one red test does not cancel the queue.
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        test:
+          - tests/e2e/megatron/test_qwen3_5_35B_A3B_mtp/test_mtp1_spec_v2_r3.py
+          - tests/e2e/megatron/test_qwen3_30B_A3B/test_deepep_fp8_bridge.py
+          - tests/e2e/fsdp/test_qwen3_4B_fsdp_hybrid_shard_r2s2.py
+          - tests/e2e/megatron/model_scripts/test_deepseek_v4_flash_4layer_ci.py
+          - tests/e2e/megatron/model_scripts/test_glm5_2_744b_a40b_5layer_ci.py
+          - tests/e2e/megatron/model_scripts/test_inkling_small_4layer_ci.py
+          - tests/e2e/megatron/test_glm47_flash/test_r3_mtp.py
+          - tests/e2e/megatron/test_qwen3_4B_offload_disk_stream.py
+    name: ${{ matrix.test }}
     uses: ./.github/workflows/_run-ci-rocm.yml
     with:
       runs_on: '["self-hosted", "amd", "mi350", "8gpu"]'
@@ -160,10 +168,10 @@ jobs:
       checkout_ref: ${{ github.event_name == 'pull_request_target' && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.sha }}
       execute_command: >-
         python tests/ci/run_suite.py --hw rocm --suite stage-c-8-gpu-mi350
+        --only ${{ matrix.test }}
         --cadence ${{ needs.resolve-ci-policy.outputs.cadence }}
         --labels ${{ needs.resolve-ci-policy.outputs.raw_labels }}
         ${{ github.event_name == 'workflow_dispatch' && '--match-all-labels' || '' }}
-        --continue-on-error
         --enable-retry --max-attempts 2
     secrets:
       WANDB_API_KEY: ${{ (github.event_name != 'pull_request_target' || github.event.pull_request.head.repo.full_name == github.repository) && secrets.WANDB_API_KEY || '' }}

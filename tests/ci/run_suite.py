@@ -192,6 +192,20 @@ def run_a_suite(args):
         labels=include_labels,
     )
 
+    # getattr, not args.only: programmatic callers (and the seam tests) build a
+    # bare namespace without every CLI field.
+    if getattr(args, "only", None):
+        # One-test-per-job fan-out. The full collection/policy pipeline still runs
+        # first, so a file excluded by suite or labels cannot be forced in through
+        # this flag; it only narrows what already qualified.
+        qualified = {t.filename for t in ci_tests}
+        if args.only not in qualified:
+            raise SystemExit(
+                f"--only {args.only!r} did not qualify for suite {suite!r} under this "
+                f"policy. Collected: {sorted(qualified)}"
+            )
+        ci_tests = [t for t in ci_tests if t.filename == args.only]
+
     if auto_partition_size:
         ci_tests = auto_partition(ci_tests, auto_partition_id, auto_partition_size)
 
@@ -252,6 +266,15 @@ def main():
         help="Hardware backend to run tests on.",
     )
     parser.add_argument("--suite", type=str, required=True, help="Test suite to run.")
+    parser.add_argument(
+        "--only",
+        type=str,
+        default=None,
+        help="Run just this one test file (repo-relative path) out of the suite. For "
+        "one-test-per-job fan-out, so each test gets its own job log and can be "
+        "cancelled independently. Applied after suite/label filtering, so it can only "
+        "narrow what already qualified -- never force in an excluded test.",
+    )
     cadence_group = parser.add_mutually_exclusive_group()
     cadence_group.add_argument(
         "--cadence",

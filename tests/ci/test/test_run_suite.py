@@ -355,18 +355,20 @@ class TestRocmWorkflowScopeSeam:
         assert "ref: ${{ inputs.checkout_ref }}" in reusable
         assert "persist-credentials: false" in reusable
 
-    def test_mi350_image_is_resolved_not_pinned(self):
-        """The rocm720/mi35x line is rebuilt daily, so a pinned date rots within
-        days; the resolver probes back through recent dates instead."""
+    def test_mi350_image_is_pinned_not_resolved(self):
+        """The image must be pinned. Auto-resolving to the newest dated tag moved
+        the image mid-investigation: 20260807 broke bit-exact weight-sync agreement
+        that 20260806 had, and a silently-moving image makes any failure ambiguous
+        between a code regression and an image regression."""
         workflow = self._workflow()
         resolver = workflow.split("resolve-ci-image:", 1)[1].split("  stage-c-", 1)[0]
 
         assert "mi350_image: ${{ steps.resolve.outputs.mi350_image }}" in resolver
-        # A single generic output would let a stage bind the wrong family if a
-        # second GPU family is ever added back.
         assert "container_image: ${{ steps.resolve.outputs.container_image }}" not in workflow
-        assert "BASE=miles-rocm720-mi35x" in resolver
-        assert "docker manifest inspect" in resolver
+        assert 'TAG_MI350="miles-rocm720-mi35x-' in resolver
+        # The date-walking probe must be gone, or the pin is decorative.
+        assert "docker manifest inspect" not in resolver
+        assert 'date -u -d "-${i} day"' not in resolver
 
         stage = workflow.split("  stage-c-8-gpu-mi350:", 1)[1]
         assert "container_image: ${{ needs.resolve-ci-image.outputs.mi350_image }}" in stage
@@ -389,14 +391,18 @@ class TestRocmWorkflowScopeSeam:
 
         assert 'runs_on: \'["self-hosted", "amd", "mi350", "8gpu"]\'' in stage
         assert "--suite stage-c-8-gpu-mi350" in command
-        # A shard matrix over a single runner buys nothing and serialises the run.
-        assert "partition_id:" not in stage
+        # One job per test, serialised on the single runner, so each test gets its
+        # own log and retry budget.
+        assert "--only ${{ matrix.test }}" in command
+        assert "max-parallel: 1" in stage
+        assert "fail-fast: false" in stage
+        # est_time-based sharding is not how this fans out.
         assert "--auto-partition" not in command
         assert "if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'" in stage
         assert "format('refs/pull/{0}/merge', github.event.pull_request.number)" in stage
-        # 8 tests being brought up on ROCm: halting on the first failure would
-        # hide the rest for a full run's wall-clock.
-        assert "--continue-on-error" in command
+        # Each test is now its own job, so --continue-on-error is unnecessary:
+        # a red job cannot hide the others (fail-fast: false keeps the queue going).
+        assert "--continue-on-error" not in command
 
 
 # --- CLI seam: local nightly alias and invalid-suite exit behavior -----------
