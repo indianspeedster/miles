@@ -128,7 +128,28 @@ PATCH_34016 = {
     ],
 }
 
-PATCHES = {"sglang#34016 aiter-shuffled block FP8 weight checking": PATCH_34016}
+# sgl-project/sglang#34006 -- Qwen3-MoE produced garbage with the mori a2a backend.
+# The forward dispatch fell through to forward_normal for every backend except
+# deepep/ascend_fuseep, so mori silently skipped its a2a path. Symptom is a large
+# train/rollout logprob split (observed log_probs -10.22 vs rollout -5.67), which
+# fails the CI logprobs check. Needed by test_qwen3_30B_A3B/test_deepep_fp8_bridge,
+# which runs ep_backend="mori" on ROCm.
+PATCH_34006 = {
+    "models/qwen3_moe.py": [
+        (
+            "            not get_moe_a2a_backend().is_deepep()\n"
+            "            and not get_moe_a2a_backend().is_ascend_fuseep()",
+            "            not get_moe_a2a_backend().is_deepep()\n"
+            "            and not get_moe_a2a_backend().is_mori()\n"
+            "            and not get_moe_a2a_backend().is_ascend_fuseep()",
+        ),
+    ],
+}
+
+PATCHES = {
+    "sglang#34016 aiter-shuffled block FP8 weight checking": PATCH_34016,
+    "sglang#34006 Qwen3-MoE mori a2a dispatch": PATCH_34006,
+}
 
 
 def main() -> int:

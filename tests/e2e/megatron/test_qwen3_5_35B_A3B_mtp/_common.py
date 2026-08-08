@@ -172,7 +172,13 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
         # flex builds _DeepepManager unconditionally; deep_ep is not in the ROCm
         # image. Drop this branch once it is.
         f"--moe-token-dispatcher-type {'alltoall' if _IS_HIP else 'flex'} "
-        "--rematerialize-param-from-master-weight "
+        # --rematerialize-param-from-master-weight (upstream #1572) rebuilds the bf16
+        # param buffer from the optimizer's fp32 master weights after a pause, so the
+        # first training step runs on params re-derived rather than the exact bf16
+        # tensors synced to the rollout engine. That ~1e-9 policy difference trips the
+        # --ci-test first-step invariant `abs(train/ppo_kl) < 1e-9`: measured
+        # ppo_kl -2.39e-09 with it, -8.85e-12 without, every other metric unchanged.
+        # Not platform-specific. Restore once #1572 and the invariant are reconciled.
     )
 
     train_args = (
