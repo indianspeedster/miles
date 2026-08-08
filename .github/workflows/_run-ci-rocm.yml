@@ -158,6 +158,12 @@ jobs:
           cd /root/Megatron-LM && git reset --hard HEAD && git clean -fd && git fetch origin "$MEGATRON_PR" && git checkout -f FETCH_HEAD && git log --oneline -1 && pip install -e . --no-deps --break-system-packages
           cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
           pip install polars zstandard xxhash blake3 --break-system-packages
+          # numba: sglang.srt.multimodal.processors.inkling imports njit at module
+          # scope, so without it the processor never registers and the SGLang HTTP
+          # server exits during tokenizer-manager init under --sglang-enable-multimodal.
+          # The launcher then hangs forever rather than failing (_wait_server_healthy
+          # has no timeout). Not in the rocm/sgl-dev image; drop this once it is.
+          pip install numba==0.66.0 llvmlite==0.48.0 --break-system-packages
 
       - name: Install (miles only)
         if: ${{ inputs.skip_dependency_install }}
@@ -165,6 +171,15 @@ jobs:
         run: |
           cd $GITHUB_WORKSPACE && pip install -e . --no-deps --break-system-packages
           pip install polars zstandard xxhash blake3 --break-system-packages
+          # See the numba note in the step above.
+          pip install numba==0.66.0 llvmlite==0.48.0 --break-system-packages
+
+      - name: Apply pending SGLang ROCm fixes
+        shell: bash
+        # The image bakes a fixed SGLang, so fixes that are still open upstream PRs
+        # cannot reach the job container any other way. The script is idempotent and
+        # skips hunks already present, so it is a no-op once the image catches up.
+        run: python tests/ci/apply_sglang_rocm_patches.py
 
       - name: Resolve suite plan
         shell: bash

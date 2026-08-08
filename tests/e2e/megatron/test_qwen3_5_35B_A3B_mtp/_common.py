@@ -16,10 +16,14 @@ Spec (EAGLE) and spec-v2 (mamba scheduler) are on for the whole suite; R3 is per
 import os
 from dataclasses import dataclass
 
+import torch
+
 import miles.utils.external_utils.command_utils as U
 
 MODEL_NAME = "Qwen3.5-35B-A3B"
 MODEL_TYPE = "qwen3.5-35B-A3B"
+
+_IS_HIP = torch.version.hip is not None
 
 
 @dataclass
@@ -165,7 +169,9 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
         "--actor-num-nodes 1 "
         f"--actor-num-gpus-per-node {case.num_gpus_per_node} "
         "--colocate "
-        "--moe-token-dispatcher-type flex "
+        # flex builds _DeepepManager unconditionally; deep_ep is not in the ROCm
+        # image. Drop this branch once it is.
+        f"--moe-token-dispatcher-type {'alltoall' if _IS_HIP else 'flex'} "
         "--rematerialize-param-from-master-weight "
     )
 
@@ -187,9 +193,15 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
 
 def execute(case: CaseConfig, *, wandb_file: str) -> None:
     train_args = build_train_args(case, wandb_file=wandb_file)
+    extra_env_vars = {"SGLANG_ENABLE_SPEC_V2": "1"}
+    if _IS_HIP:
+        # TODO(sglang): aiter enables shared-expert fusion, which makes
+        # RoutedExpertsCapturer over-size its device buffer by one column and
+        # kills CUDA-graph capture. Costs rollout throughput; drop once fixed.
+        extra_env_vars["SGLANG_USE_AITER"] = "0"
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=case.num_gpus_per_node,
         megatron_model_type=MODEL_TYPE,
-        extra_env_vars={"SGLANG_ENABLE_SPEC_V2": "1"},
+        extra_env_vars=extra_env_vars,
     )

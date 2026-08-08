@@ -14,9 +14,8 @@ register_cuda_ci(
 )
 register_rocm_ci(
     est_time=1800,
-    suite="stage-c-4-gpu-mi300x",
+    suite="stage-c-8-gpu-mi350",
     labels=["megatron", "model-scripts", "amd"],
-    disabled="Disable due to failure",
 )
 
 register_ci_gate(metric_key="train/grad_norm")
