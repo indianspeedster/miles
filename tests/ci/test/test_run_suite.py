@@ -394,9 +394,9 @@ class TestRocmWorkflowScopeSeam:
         assert "--auto-partition" not in command
         assert "if: needs.resolve-ci-policy.outputs.allow_self_hosted == 'true'" in stage
         assert "format('refs/pull/{0}/merge', github.event.pull_request.number)" in stage
-        # The suite is two tests; halting on the first failure surfaces it sooner
-        # than grinding through the rest.
-        assert "--continue-on-error" not in command
+        # 8 tests being brought up on ROCm: halting on the first failure would
+        # hide the rest for a full run's wall-clock.
+        assert "--continue-on-error" in command
 
 
 # --- CLI seam: local nightly alias and invalid-suite exit behavior -----------
