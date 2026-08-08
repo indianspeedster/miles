@@ -148,6 +148,11 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
     )
     if case.use_r3:
         sglang_args += "--use-rollout-routing-replay "
+    if _IS_HIP:
+        # Fusion folds the shared expert into experts.w13/w2 as an extra slot that
+        # the weight sync never writes, so the rollout runs a stale shared expert.
+        # Off matches CUDA, which never enables fusion by default.
+        sglang_args += "--sglang-disable-shared-experts-fusion "
 
     # When MTP training is off the rollout still runs EAGLE spec from the checkpoint
     # draft; those draft weights just never get synced (see the mtp0 case + skip-list).
@@ -172,13 +177,7 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
         # flex builds _DeepepManager unconditionally; deep_ep is not in the ROCm
         # image. Drop this branch once it is.
         f"--moe-token-dispatcher-type {'alltoall' if _IS_HIP else 'flex'} "
-        # --rematerialize-param-from-master-weight (upstream #1572) rebuilds the bf16
-        # param buffer from the optimizer's fp32 master weights after a pause, so the
-        # first training step runs on params re-derived rather than the exact bf16
-        # tensors synced to the rollout engine. That ~1e-9 policy difference trips the
-        # --ci-test first-step invariant `abs(train/ppo_kl) < 1e-9`: measured
-        # ppo_kl -2.39e-09 with it, -8.85e-12 without, every other metric unchanged.
-        # Not platform-specific. Restore once #1572 and the invariant are reconciled.
+        "--rematerialize-param-from-master-weight "
     )
 
     train_args = (
@@ -199,15 +198,9 @@ def build_train_args(case: CaseConfig, *, wandb_file: str) -> str:
 
 def execute(case: CaseConfig, *, wandb_file: str) -> None:
     train_args = build_train_args(case, wandb_file=wandb_file)
-    extra_env_vars = {"SGLANG_ENABLE_SPEC_V2": "1"}
-    if _IS_HIP:
-        # TODO(sglang): aiter enables shared-expert fusion, which makes
-        # RoutedExpertsCapturer over-size its device buffer by one column and
-        # kills CUDA-graph capture. Costs rollout throughput; drop once fixed.
-        extra_env_vars["SGLANG_USE_AITER"] = "0"
     U.execute_train(
         train_args=train_args,
         num_gpus_per_node=case.num_gpus_per_node,
         megatron_model_type=MODEL_TYPE,
-        extra_env_vars=extra_env_vars,
+        extra_env_vars={"SGLANG_ENABLE_SPEC_V2": "1"},
     )
