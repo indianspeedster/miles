@@ -23,7 +23,7 @@ import miles.utils.external_utils.command_utils as U
 register_cuda_ci(est_time=900, suite="stage-c-4-gpu-h200", labels=["megatron", "model-scripts"])
 register_rocm_ci(
     est_time=900,
-    suite="stage-c-8-gpu-mi350",
+    suite="stage-c-4-gpu-mi300x",
     labels=["megatron", "model-scripts", "amd"],
 )
 

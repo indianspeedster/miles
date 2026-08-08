@@ -7,7 +7,7 @@ from tests.ci.metric_history import register_ci_gate
 register_cuda_ci(est_time=1900, suite="stage-c-4-gpu-h200", labels=["megatron", "model-scripts"])
 register_rocm_ci(
     est_time=1900,
-    suite="stage-c-8-gpu-mi350",
+    suite="stage-c-4-gpu-mi300x",
     labels=["megatron", "model-scripts", "amd"],
 )
 
